@@ -1,0 +1,67 @@
+import os
+from itertools import combinations
+
+with open("input_files.txt", "r") as f:
+    fasta_files = [line.strip() for line in f.readlines()]
+
+# ensure basenames are correctly derived from the absolute paths
+basename_map = {os.path.basename(f).split(".")[0]: f for f in fasta_files}
+fasta = list(basename_map.keys())
+
+# generate all pairwise combinations of basenames
+fasta_pairs = [(b1, b2) for b1, b2 in combinations(fasta, 2)]
+
+rule all:
+    input:
+        # KMC outputs for each FASTA file
+        expand("results/kmers/{basename}_k{k}.txt", basename=fasta, k=[21, 31, 41]),
+        # jaccard comparisons for all valid FASTA pairs
+        expand("results/jaccard/{basename1}_vs_{basename2}_k{k}.txt", 
+               basename1=[pair[0] for pair in fasta_pairs],
+               basename2=[pair[1] for pair in fasta_pairs],
+               k=[21, 31, 41])
+
+# 1: process k-mers using KMC
+rule kmc:
+    input:
+        fasta=lambda wildcards: basename_map.get(wildcards.basename, None)
+    output:
+        kmers="results/kmers/{basename}_k{k}.txt"
+    params:
+        k="{k}"
+    shell:
+        """
+        mkdir -p results/tmp_kmc_dir results/kmers
+
+        # Run KMC to process all k-mers with ci1
+        ../external/kmc/bin/kmc -k{params.k} -ci1 -fa {input.fasta} \
+            results/tmp_kmc_dir/kmc_output_{wildcards.basename}_k{wildcards.k} .
+
+        # Export k-mers with KMC tools
+        ../external/kmc/bin/kmc_tools transform \
+            results/tmp_kmc_dir/kmc_output_{wildcards.basename}_k{wildcards.k} dump {output}
+
+        # Clean up intermediate files
+        rm -rf results/tmp_kmc_dir
+        """
+
+# 2: calculate jaccard similarity
+rule jaccard:
+    input:
+        kmers1="results/kmers/{basename1}_k{k}.txt",
+        kmers2="results/kmers/{basename2}_k{k}.txt"
+    output:
+        "results/jaccard/{basename1}_vs_{basename2}_k{k}.txt"
+    params:
+        jaccard_path="./bin/calculate_jaccard"
+    shell:
+        """
+        mkdir -p results/jaccard
+
+        # Run the C++ Jaccard similarity calculation
+        {params.jaccard_path} {input.kmers1} {input.kmers2} {output}
+        """
+
+# 3: compute ANI with Skani
+
+# 4: da plot
