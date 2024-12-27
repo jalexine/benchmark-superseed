@@ -10,3 +10,6 @@
 [submodule "external/sshash"]
 	path = external/sshash
 	url = https://github.com/jermp/sshash.git
+[submodule "external/skani"]
+	path = external/skani
+	url = https://github.com/bluenote-1577/skani.git

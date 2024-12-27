@@ -1,67 +1,134 @@
 import os
 from itertools import combinations
 
+# ------------------ Configuration ------------------
+
+# Read unique FASTA basenames from input_files.txt
 with open("input_files.txt", "r") as f:
-    fasta_files = [line.strip() for line in f.readlines()]
+    FASTA_PATHS = [line.strip() for line in f.readlines()]
 
-# ensure basenames are correctly derived from the absolute paths
-basename_map = {os.path.basename(f).split(".")[0]: f for f in fasta_files}
-fasta = list(basename_map.keys())
+FASTA_FILES = sorted(set(os.path.basename(fp).split('.')[0] for fp in FASTA_PATHS))
 
-# generate all pairwise combinations of basenames
-fasta_pairs = [(b1, b2) for b1, b2 in combinations(fasta, 2)]
+FASTA_PATH_DICT = {
+    os.path.basename(fp).split('.')[0]: fp
+    for fp in FASTA_PATHS
+}
+
+# Generate all unique pairs (f1, f2) with f1 != f2
+FASTA_PAIRS = list(combinations(FASTA_FILES, 2))
+
+# Define N and K
+N_VALUES = [1, 4]
+K_VALUES = [21, 31]
+
+
+# ------------------ Rules ------------------
 
 rule all:
     input:
-        # KMC outputs for each FASTA file
-        expand("results/kmers/{basename}_k{k}.txt", basename=fasta, k=[21, 31, 41]),
-        # jaccard comparisons for all valid FASTA pairs
-        expand("results/jaccard/{basename1}_vs_{basename2}_k{k}.txt", 
-               basename1=[pair[0] for pair in fasta_pairs],
-               basename2=[pair[1] for pair in fasta_pairs],
-               k=[21, 31, 41])
+        "results/summary.csv"
 
-# 1: process k-mers using KMC
-rule kmc:
+rule superseed:
+    """
+    Step 1: Generate super-fastas using superseed.
+    """
     input:
-        fasta=lambda wildcards: basename_map.get(wildcards.basename, None)
+        lambda wc: FASTA_PATH_DICT[wc.fasta]
     output:
-        kmers="results/kmers/{basename}_k{k}.txt"
+        "results/superfasta/{fasta}_N{n}.fa"
     params:
-        k="{k}"
+        n=lambda wc: wc.n
     shell:
         """
-        mkdir -p results/tmp_kmc_dir results/kmers
-
-        # Run KMC to process all k-mers with ci1
-        ../external/kmc/bin/kmc -k{params.k} -ci1 -fa {input.fasta} \
-            results/tmp_kmc_dir/kmc_output_{wildcards.basename}_k{wildcards.k} .
-
-        # Export k-mers with KMC tools
-        ../external/kmc/bin/kmc_tools transform \
-            results/tmp_kmc_dir/kmc_output_{wildcards.basename}_k{wildcards.k} dump {output}
-
-        # Clean up intermediate files
-        rm -rf results/tmp_kmc_dir
+        mkdir -p results/superfasta
+        ../src/superseed {input} {params.n} {output}
         """
 
-# 2: calculate jaccard similarity
-rule jaccard:
+rule kmc_count:
+    """
+    Step 2: Use KMC to count k-mers, then dump them to a .txt file.
+    """
     input:
-        kmers1="results/kmers/{basename1}_k{k}.txt",
-        kmers2="results/kmers/{basename2}_k{k}.txt"
+        "results/superfasta/{fasta}_N{n}.fa"
     output:
-        "results/jaccard/{basename1}_vs_{basename2}_k{k}.txt"
+        db_pre   = "tmp/{fasta}_N{n}_K{k}.kmc_pre",
+        db_suf   = "tmp/{fasta}_N{n}_K{k}.kmc_suf",
+        kmc_dump = "results/kmers/{fasta}_N{n}_K{k}.txt"
     params:
-        jaccard_path="./bin/calculate_jaccard"
+        k=lambda wc: wc.k
+    shell:
+        """
+        mkdir -p tmp results/kmers
+
+        ../external/kmc/bin/kmc -k{params.k} -ci1 -fa \
+            {input} \
+            tmp/{wildcards.fasta}_N{wildcards.n}_K{wildcards.k} \
+            tmp/
+
+        ../external/kmc/bin/kmc_tools transform \
+            tmp/{wildcards.fasta}_N{wildcards.n}_K{wildcards.k} \
+            dump {output.kmc_dump}
+        """
+
+rule jaccard_calc:
+    """
+    Step 3a: Compute Jaccard index for each pair (fasta1, fasta2, n, k)
+             from the two KMC txt dumps.
+    """
+    input:
+        kmers1="results/kmers/{fasta1}_N{n}_K{k}.txt",
+        kmers2="results/kmers/{fasta2}_N{n}_K{k}.txt"
+    output:
+        "results/jaccard/{fasta1}_vs_{fasta2}_N{n}_K{k}.txt"
     shell:
         """
         mkdir -p results/jaccard
-
-        # Run the C++ Jaccard similarity calculation
-        {params.jaccard_path} {input.kmers1} {input.kmers2} {output}
+        ./jaccard_calc {input.kmers1} {input.kmers2} > {output}
         """
 
-# 3: compute ANI with Skani
+rule skani_calc:
+    """
+    Step 3b: Run skani for each pair of super-fastas (fasta1, fasta2, n).
+    We produce a '.ani' file that contains the lines with 'Ref_file Query_file ANI ...'
+    """
+    input:
+        super1="results/superfasta/{fasta1}_N{n}.fa",
+        super2="results/superfasta/{fasta2}_N{n}.fa"
+    output:
+        "results/skani/{fasta1}_vs_{fasta2}_N{n}.ani"
+    shell:
+        """
+        mkdir -p results/skani
+        ../external/skani/target/release/skani dist {input.super1} {input.super2} > {output}
+        """
 
-# 4: da plot
+
+rule aggregate_results_cpp:
+    """
+    Step 4: Call a C++ aggregator to merge all Jaccard + skani results into summary.csv
+    Columns: [fasta1, fasta2, n, k, jaccard_score, skani_dist]
+    """
+    input:
+        # All Jaccard results
+        jaccard_files=lambda wc: [
+            f"results/jaccard/{f1}_vs_{f2}_N{n}_K{k}.txt"
+            for (f1, f2) in FASTA_PAIRS
+            for n in N_VALUES
+            for k in K_VALUES
+        ],
+        # All skani results
+        skani_files=lambda wc: [
+            f"results/skani/{f1}_vs_{f2}_N{n}.ani"
+            for (f1, f2) in FASTA_PAIRS
+            for n in N_VALUES
+        ]
+    output:
+        "results/summary.csv"
+    shell:
+        """
+        mkdir -p results
+        ./aggregator {output} {input.jaccard_files} --skani {input.skani_files}
+        """
+
+
+#clean & plot
