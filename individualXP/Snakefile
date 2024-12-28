@@ -1,7 +1,6 @@
 import os
-import yaml
 
-
+# ------------------ Configuration ------------------
 N_VALUES = [1, 2, 4, 8]
 K_VALUES = [21, 31, 41, 51, 61]
 
@@ -11,6 +10,8 @@ FASTA_FILES = [line.strip() for line in open("input_files.txt", "r") if line.str
 
 def get_fasta_name(path):
     return os.path.splitext(os.path.basename(path))[0]
+
+# ------------------ Rules ------------------
 
 rule all:
     input:
