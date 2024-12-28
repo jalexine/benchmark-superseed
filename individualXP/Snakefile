@@ -1,0 +1,187 @@
+import os
+import yaml
+
+
+N_VALUES = [1, 2, 4, 8]
+K_VALUES = [21, 31, 41, 51, 61]
+
+# read the absolute paths from a text file, one path per line
+FASTA_FILES = [line.strip() for line in open("input_files.txt", "r") if line.strip()]
+
+
+def get_fasta_name(path):
+    return os.path.splitext(os.path.basename(path))[0]
+
+rule all:
+    input:
+        # Plot repeated Kmer KMC
+        expand("results/plots/{fasta_name}_repeated_kmers.png", 
+            fasta_name=[get_fasta_name(f) for f in FASTA_FILES]
+        ),
+        # Plot eulertigs ggcat
+        expand("results/plots/{fasta_name}_eulertigs.png", 
+            fasta_name=[get_fasta_name(f) for f in FASTA_FILES]
+        ),
+        # Plot sizes SShash
+        expand("results/plots/{fasta_name}_sizes_SShash.png", 
+            fasta_name=[get_fasta_name(f) for f in FASTA_FILES]
+        ),
+
+rule superseed:
+    input:
+        fasta=lambda wildcards: next(f for f in FASTA_FILES if get_fasta_name(f) == wildcards.fasta_name)
+    output:
+        temp("results/superfasta/{fasta_name}_N{n}.fa")
+    params:
+        n="{n}"
+    shell:
+        """
+        mkdir -p results/superfasta
+        ../bin/superseed {input} {params.n} {output}
+        """
+
+rule kmc_process:
+    input:
+        fasta="results/superfasta/{fasta_name}_N{n}.fa"
+    output:
+        temp("results/repeatedkmers/{fasta_name}_N{n}_k{k}_repeated.txt")
+    params:
+        k="{k}"
+    shell:
+        """
+        mkdir -p results/tmp_kmc_dir results/repeatedkmers
+
+        # Run KMC
+        ../external/kmc/bin/kmc -k{params.k} -ci2 -fa {input.fasta} \
+            results/tmp_kmc_dir/kmc_output_{wildcards.fasta_name}_N{wildcards.n}_k{wildcards.k} .
+
+        # Export k-mers with KMC tools
+        ../external/kmc/bin/kmc_tools transform \
+            results/tmp_kmc_dir/kmc_output_{wildcards.fasta_name}_N{wildcards.n}_k{wildcards.k} dump \
+            results/tmp_kmc_dir/kmc_dump_{wildcards.fasta_name}_N{wildcards.n}_k{wildcards.k}.txt
+
+        # Filter with awk to keep only repeated k-mers
+        awk '$2 >= 2' results/tmp_kmc_dir/kmc_dump_{wildcards.fasta_name}_N{wildcards.n}_k{wildcards.k}.txt > {output}
+
+        # Clean up intermediate files
+        rm -f results/tmp_kmc_dir/kmc_dump_{wildcards.fasta_name}_N{wildcards.n}_k{wildcards.k}.txt
+        rm -rf results/tmp_kmc_dir
+        """
+
+rule plot_repeated_kmers:
+    input:
+        txt_files=lambda wildcards: expand(
+            "results/repeatedkmers/{fasta_name}_N{n}_k{k}_repeated.txt", 
+            fasta_name=[wildcards.fasta_name],
+            n=N_VALUES, 
+            k=K_VALUES
+        )
+    output:
+        png="results/plots/{fasta_name}_repeated_kmers.png"
+    shell:
+        """
+        mkdir -p results/plots
+        python3 plot_repeated_kmers.py {input.txt_files} {output.png}
+        """
+
+rule stats_eulertigs:
+    input:
+        superfasta=expand(
+            "results/superfasta/{fasta_name}_N{n}.fa", 
+            fasta_name="{fasta_name}", 
+            n=N_VALUES
+        )
+    output:
+        temp("results/stats_eulertigs/estats.{fasta_name}.txt")
+    params:
+        k_values=K_VALUES,
+        n_values=N_VALUES,
+        threads=8
+    shell:
+        """
+        mkdir -p results/eulertigs results/stats_eulertigs
+
+        # Initialize the stats file with a clear header
+        echo -e "K\tN\tFile\tSize\tNum_seqs\tMin_len\tAvg_len\tMax_len" > {output}
+
+        # Loop through each combination of k and n
+        for k in {params.k_values}; do
+            for n in {params.n_values}; do
+                eulertigs_file="results/eulertigs/{wildcards.fasta_name}_k${{k}}_N${{n}}.fa"
+                rm -f $eulertigs_file
+
+                # Run ggcat
+                echo "Running: ggcat build --eulertigs -k $k -j {params.threads} results/superfasta/{wildcards.fasta_name}_N${{n}}.fa -o $eulertigs_file" >> debug.log
+                ggcat build --eulertigs -k $k -j {params.threads} results/superfasta/{wildcards.fasta_name}_N${{n}}.fa -o $eulertigs_file
+
+                # Add stats
+                seqkit stats $eulertigs_file | tail -n +2 | awk -v N=$n -v K=$k '{{print K"\\t"N"\\t"$0}}' >> {output}
+            done
+        done
+
+        rm -rf results/eulertigs
+        """
+
+
+
+rule plot_eulertigs:
+    input:
+        stats="results/stats_eulertigs/estats.{fasta_name}.txt"
+    output:
+        plot="results/plots/{fasta_name}_eulertigs.png"
+    params:
+        K_VALUES,
+        N_VALUES
+    shell:
+        """
+        mkdir -p results/plots
+        python3 plot_eulertigs.py {input.stats} {output.plot}
+        """
+
+rule sshash_build:
+    input:
+        fasta="results/superfasta/{fasta_name}_N{n}.fa"
+    output:
+        log=temp("results/sshash/{fasta_name}_N{n}_k{k}.log"),
+        index=temp("results/sshash/{fasta_name}_N{n}_k{k}.index")
+    params:
+        k="{k}",
+        m=15,
+        seed=54321
+    shell:
+        """
+        mkdir -p results/sshash
+        ../external/sshash/build/sshash build -i {input.fasta} -k {params.k} -m {params.m} -s {params.seed} -o {output.index} > {output.log}
+        """
+
+rule extract_sizes:
+    input:
+        log=expand("results/sshash/{fasta}_N{n}_k{k}.log", fasta="{fasta}", n=N_VALUES, k=K_VALUES)
+    output:
+        summary=temp("results/sshash/stats/{fasta}_summary.txt")
+    shell:
+        """
+        mkdir -p results/sshash/stats
+
+        echo "N,k,Size_MB" > {output.summary}
+        for log in {input.log}; do
+            n=$(basename ${{log}} | cut -d'_' -f2 | sed 's/N//')
+            k=$(basename ${{log}} | cut -d'_' -f3 | sed 's/k//')
+            size=$(grep "total index size" ${{log}} | awk '{{print $(NF-1)}}')
+            echo "${{n}},${{k}},${{size}}" >> {output.summary}
+        done
+        """
+
+
+
+rule plot_summary_SShah:
+    input:
+        summary="results/sshash/stats/{fasta_name}_summary.txt"
+    output:
+        plot="results/plots/{fasta_name}_sizes_SShash.png"
+    shell:
+        """
+        mkdir -p results/plots
+        python3 plot_sshash.py {input.summary} {output.plot}
+        """
+
