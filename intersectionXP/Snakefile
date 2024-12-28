@@ -26,7 +26,9 @@ K_VALUES = [21, 31]
 
 rule all:
     input:
-        "results/summary.csv"
+        "results/summary.csv",
+        "results/plots/plot.done"
+
 
 rule superseed:
     """
@@ -128,7 +130,22 @@ rule aggregate_results_cpp:
         """
         mkdir -p results
         ./aggregator {output} {input.jaccard_files} --skani {input.skani_files}
+        rm -r results/superfasta/ results/skani/ results/kmers/ results/jaccard/ tmp/
         """
 
 
-#clean & plot
+rule intersection_plot:
+    """
+    Step 5: Plot the summary results 
+    We read 'results/summary.csv' and produce multiple plots into 'results/plots/'.
+    """
+    input:
+        "results/summary.csv"
+    output:
+        "results/plots/plot.done"  # i used a sentinel file bc snakemake...
+    shell:
+        """
+        mkdir -p results/plots
+        python3 intersection_plot.py {input}
+        touch {output}
+        """
