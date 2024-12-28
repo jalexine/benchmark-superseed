@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import sys
 
 if len(sys.argv) < 3:
-    print("Usage: python sshashplot.py <input_file> <output_file>")
+    print("♡ pls use: python sshashplot.py <input_file> <output_file>")
     sys.exit(1)
 
 input_file = sys.argv[1]
@@ -19,11 +19,15 @@ except Exception as e:
 df["Size_MB"] = pd.to_numeric(df["Size_MB"])
 df["N"] = pd.to_numeric(df["N"])
 
+# Clean up the 'k' column by removing '.log' and converting it to integers
+df["k"] = df["k"].str.replace(".log", "").astype(int)
+
 plt.figure(figsize=(10, 6))
 for n_value, group in df.groupby("N"):
+    # Plot data for each value of N
     plt.plot(group["k"], group["Size_MB"], marker="o", label=f"N = {n_value}")
 
-#change the title when this plot is ok
+# Set explicit x-axis ticks
 plt.xticks([21, 31, 41, 51, 61])
 plt.xlabel("k-mer size (k)")
 plt.ylabel("Index size (MB)")
@@ -31,6 +35,7 @@ plt.title("Index Size vs k-mer Size")
 plt.legend(title="N values")
 plt.grid()
 
+# Adjust layout and save the plot
 plt.tight_layout()
 plt.savefig(output_file)
 print(f"Plot saved as {output_file}")

@@ -52,11 +52,11 @@ rule kmc_process:
         mkdir -p results/tmp_kmc_dir results/repeatedkmers
 
         # Run KMC
-        ../external/kmc/bin/kmc -k{params.k} -ci2 -fa {input.fasta} \
+        ../bin/kmc -k{params.k} -ci2 -fa {input.fasta} \
             results/tmp_kmc_dir/kmc_output_{wildcards.fasta_name}_N{wildcards.n}_k{wildcards.k} .
 
         # Export k-mers with KMC tools
-        ../external/kmc/bin/kmc_tools transform \
+        ../bin/kmc_tools transform \
             results/tmp_kmc_dir/kmc_output_{wildcards.fasta_name}_N{wildcards.n}_k{wildcards.k} dump \
             results/tmp_kmc_dir/kmc_dump_{wildcards.fasta_name}_N{wildcards.n}_k{wildcards.k}.txt
 
@@ -151,14 +151,14 @@ rule sshash_build:
     shell:
         """
         mkdir -p results/sshash
-        ../external/sshash/build/sshash build -i {input.fasta} -k {params.k} -m {params.m} -s {params.seed} -o {output.index} > {output.log}
+        ../bin/sshash build -i {input.fasta} -k {params.k} -m {params.m} -s {params.seed} -o {output.index} > {output.log}
         """
 
 rule extract_sizes:
     input:
         log=expand("results/sshash/{fasta}_N{n}_k{k}.log", fasta="{fasta}", n=N_VALUES, k=K_VALUES)
     output:
-        summary=temp("results/sshash/stats/{fasta}_summary.txt")
+        summary="results/sshash/stats/{fasta}_summary.txt"
     shell:
         """
         mkdir -p results/sshash/stats
