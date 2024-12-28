@@ -11,12 +11,12 @@ SKANI_BIN = $(BIN_DIR)/skani
 CONDA_ENV = benchmark_env
 ENV_YML = environment.yml
 
-.PHONY: all install tools kmc ggcat seqkit sshash skani clean conda_env cargo
+.PHONY: all install tools kmc ggcat seqkit sshash skani aggregator jaccard_calc superseed clean conda_env cargo
 
 all: install
 
-install: conda_env tools
-	@echo "Environment and tools installed. You can 'cd individualXP/ or intersectionXP/' now run 'snakemake --cores 1'."
+install: conda_env tools cpp
+	@echo "Environment, tools, and compiled scripts are ready. You can now 'cd individualXP/' or 'cd intersectionXP/' and run 'snakemake --cores 1'."
 
 tools: | $(BIN_DIR) kmc ggcat seqkit sshash skani
 
@@ -53,12 +53,29 @@ sshash: install_rust check_rust
 	mv $(TOOLS_DIR)/sshash/build/sshash $(SSHASH_BIN)
 	@echo "SSHash built at $(SSHASH_BIN)"
 
-
 skani:
 	@echo "Installing Skani..."
 	cd $(TOOLS_DIR)/skani && cargo build --release
 	mv $(TOOLS_DIR)/skani/target/release/skani $(SKANI_BIN)
 	@echo "Skani built at $(SKANI_BIN)"
+
+# Compile C++ scripts
+cpp: superseed jaccard_calc aggregator
+
+superseed:
+	@echo "Compiling superseed.cpp..."
+	g++ -std=c++17 -o $(BIN_DIR)/superseed superseed.cpp
+	@echo "Compiled superseed.cpp to $(BIN_DIR)/superseed"
+
+jaccard_calc:
+	@echo "Compiling jaccard_calc.cpp..."
+	g++ -std=c++17 -o $(BIN_DIR)/jaccard_calc intersectionXP/jaccard_calc.cpp
+	@echo "Compiled jaccard_calc.cpp to $(BIN_DIR)/jaccard_calc"
+
+aggregator:
+	@echo "Compiling aggregator.cpp..."
+	g++ -std=c++17 -o $(BIN_DIR)/aggregator intersectionXP/aggregator.cpp
+	@echo "Compiled aggregator.cpp to $(BIN_DIR)/aggregator"
 
 # Install Conda environment
 conda_env:
@@ -76,7 +93,7 @@ ifeq ($(shell uname), Darwin)
 else
 	# Linux
 	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-	export PATH="$HOME/.cargo/bin:$(PATH)"  # Ajout au PATH
+	export PATH="$HOME/.cargo/bin:$(PATH)"  # Add to PATH
 endif
 	@echo "Rust and cargo installed successfully!"
 
@@ -85,7 +102,7 @@ check_rust:
 	cargo --version || (echo "Cargo is not installed! Check your installation." && exit 1)
 
 clean:
-	@echo "Cleaning up tools..."
+	@echo "Cleaning up tools and compiled scripts..."
 	rm -rf $(BIN_DIR)/*
 	rm -rf $(TOOLS_DIR)/kmc/bin $(TOOLS_DIR)/sshash/build $(TOOLS_DIR)/skani/target
 	conda remove -y ggcat || true
